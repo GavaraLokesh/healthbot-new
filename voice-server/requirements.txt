@@ -3,7 +3,5 @@ uvicorn
 httpx
 gTTS
 python-multipart
-fastapi
-uvicorn
 google-generativeai
 python-dotenv
