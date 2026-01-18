@@ -16,9 +16,15 @@ import streamlit as st
 import streamlit.components.v1 as components
 import requests
 
-from agent_graph import graph
+from voice_server.agent_graph import graph
+
 
 USERS_FILE = "users.json"
+
+# IMPORTANT:
+# Use Render deployed voice-server URL in production
+# Example:
+# export VOICE_PROXY_URL="https://healthbot-voice-server.onrender.com"
 VOICE_PROXY_URL = os.getenv("VOICE_PROXY_URL", "http://127.0.0.1:8765").rstrip("/")
 
 
@@ -224,7 +230,7 @@ def chat_page():
     with right_col:
         # Voice widget shown on the side (as you requested)
         st.markdown("#### 🎙️ Voice Assistant")
-        components.html(build_voice_widget_html(VOICE_PROXY_URL), height=360)
+        components.html(build_voice_widget_html(VOICE_PROXY_URL), height=420)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -260,38 +266,34 @@ def ai_doctor_vision_page():
         speak_box = st.empty()
 
     if analyze:
-     if not uploaded:
-        response_box.error("Please upload an image first.")
-    else:
-        try:
-            import requests
+        if not uploaded:
+            response_box.error("Please upload an image first.")
+        else:
+            try:
+                url = f"{VOICE_PROXY_URL}/vision"
 
-            url = "http://127.0.0.1:8765/vision"
+                files = {
+                    "image": ("image.jpg", uploaded.getvalue(), uploaded.type)
+                }
 
-            files = {
-                "image": ("image.jpg", uploaded.getvalue(), uploaded.type)
-            }
+                data = {
+                    "question": question,
+                    "lang": lang
+                }
 
-            data = {
-                "question": question,
-                "lang": lang
-            }
+                res = requests.post(url, files=files, data=data)
 
-            res = requests.post(url, files=files, data=data)
+                if res.status_code != 200:
+                    response_box.error(f"Vision error: {res.status_code} - {res.text}")
+                else:
+                    reply = res.json().get("reply", "").strip()
+                    if not reply:
+                        reply = "No reply from AI."
 
-            if res.status_code != 200:
-                response_box.error(f"Vision error: {res.status_code} - {res.text}")
-            else:
-                reply = res.json().get("reply", "").strip()
-                if not reply:
-                    reply = "No reply from AI."
-
-                response_box.success(reply)
-                speak_box.info("Voice will speak from Voice Assistant tab.")
-        except Exception as e:
-            response_box.error(f"Vision error: {e}")
-
-            response_box.error(f"Vision error: {e}")
+                    response_box.success(reply)
+                    speak_box.info("Voice will speak from Voice Assistant tab.")
+            except Exception as e:
+                response_box.error(f"Vision error: {e}")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -345,7 +347,7 @@ def alarm_page():
         for idx, r in enumerate(st.session_state.reminders):
             c1, c2 = st.columns([0.8, 0.2])
             with c1:
-                st.write(f"**{r['time']}** → {r['name']} : {r['msg']}  (Repeat: {r['repeat']})")
+                st.write(f"**{r['time']}** → {r['name']} : {r['msg']}  (Repeat: (Repeat: {r['repeat']})")
             with c2:
                 if st.button("Delete", key=f"del_{idx}"):
                     st.session_state.reminders.pop(idx)
@@ -358,7 +360,9 @@ def alarm_page():
 
 
 # -----------------------
-# Voice widget HTML (same working logic)
+# Voice widget HTML (UPDATED safely)
+# - Supports OLD: POST /voice (JSON -> base64 mp3)
+# - Supports NEW: POST /voice-audio (multipart file -> mp3 download)
 # -----------------------
 def build_voice_widget_html(proxy_url: str) -> str:
     return f"""
@@ -373,7 +377,7 @@ def build_voice_widget_html(proxy_url: str) -> str:
       border: 4px solid rgba(255,255,255,0.08); }}
     .va-micon {{ box-shadow: 0 0 36px rgba(255,123,214,0.45); transform: scale(1.02); }}
     .va-small {{ font-size:12px; color:#9fb0c7; }}
-    .va-log {{ margin-top:10px; max-height:220px; overflow:auto; }}
+    .va-log {{ margin-top:10px; max-height:240px; overflow:auto; }}
     .va-bubble-user {{ background: linear-gradient(90deg,#60a5fa,#34d399); color:white; padding:8px 12px; border-radius:12px; display:inline-block; max-width:85%; }}
     .va-bubble-bot {{ background:#e6eef6; color:#06121a; padding:8px 12px; border-radius:12px; display:inline-block; max-width:85%; }}
     .va-lang {{ background:#0b1220; color:#e6eef6; padding:6px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.10); }}
@@ -432,9 +436,15 @@ def build_voice_widget_html(proxy_url: str) -> str:
     logEl.scrollTop = logEl.scrollHeight;
   }}
 
-  async function fetchJson(url, opts){{
-    try{{ const r = await fetch(url, opts); return await r.json(); }}
-    catch(e){{ LOG("fetchJson " + e); return null; }}
+  async function playAudioFromBlob(blob){{
+    try{{
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      await audio.play();
+      audio.onended = () => {{
+        try{{ URL.revokeObjectURL(url); }}catch(e){{}}
+      }};
+    }}catch(e){{ LOG("audio blob play failed " + e); }}
   }}
 
   async function playAudioBase64Mp3(audioB64){{
@@ -442,25 +452,105 @@ def build_voice_widget_html(proxy_url: str) -> str:
       if(!audioB64) return;
       const audio = new Audio("data:audio/mp3;base64," + audioB64);
       await audio.play();
-    }}catch(e){{ LOG("audio play failed " + e); }}
+    }}catch(e){{ LOG("audio base64 play failed " + e); }}
+  }}
+
+  // -----------------------------
+  // NEW: record mic audio -> send to /voice-audio
+  // -----------------------------
+  async function recordAudioOnce(){{
+    const stream = await navigator.mediaDevices.getUserMedia({{ audio: true }});
+    const mediaRecorder = new MediaRecorder(stream);
+    const chunks = [];
+
+    return new Promise((resolve, reject) => {{
+      mediaRecorder.ondataavailable = (e) => {{
+        if(e.data && e.data.size > 0) chunks.push(e.data);
+      }};
+      mediaRecorder.onerror = (e) => reject(e);
+
+      mediaRecorder.onstop = () => {{
+        try {{
+          stream.getTracks().forEach(t => t.stop());
+        }} catch(e) {{}}
+
+        const blob = new Blob(chunks, {{ type: "audio/webm" }});
+        resolve(blob);
+      }};
+
+      mediaRecorder.start();
+
+      // record for 4 seconds (safe)
+      setTimeout(() => {{
+        try {{ mediaRecorder.stop(); }} catch(e) {{}}
+      }}, 4000);
+    }});
+  }}
+
+  async function callVoiceAudioEndpoint(audioBlob){{
+    try {{
+      const form = new FormData();
+      form.append("file", audioBlob, "recording.webm");
+
+      const r = await fetch(proxyBase + "/voice-audio", {{
+        method: "POST",
+        body: form
+      }});
+
+      if(!r.ok){{
+        const t = await r.text();
+        return {{ ok:false, error: t }};
+      }}
+
+      const replyBlob = await r.blob(); // mp3 file
+      return {{ ok:true, blob: replyBlob }};
+    }} catch(e) {{
+      return {{ ok:false, error: String(e) }};
+    }}
+  }}
+
+  // -----------------------------
+  // OLD: text -> /voice -> reply+base64
+  // -----------------------------
+  async function callVoiceTextEndpoint(text, lang){{
+    try {{
+      const r = await fetch(proxyBase + "/voice", {{
+        method: "POST",
+        headers: {{ "Content-Type": "application/json" }},
+        body: JSON.stringify({{ text: text, lang: lang }})
+      }});
+
+      if(!r.ok){{
+        const t = await r.text();
+        return {{ ok:false, error: t }};
+      }}
+
+      const data = await r.json();
+      return {{ ok:true, data }};
+    }} catch(e) {{
+      return {{ ok:false, error: String(e) }};
+    }}
   }}
 
   async function assistantFlow(text, lang){{
     if(!text) return;
     appendLog('user', text);
 
-    const res = await fetchJson(proxyBase + '/voice', {{
-      method:'POST',
-      headers:{{'Content-Type':'application/json'}},
-      body: JSON.stringify({{ text: text, lang: lang }})
-    }});
+    // Try OLD endpoint first (keeps backward compatibility)
+    const res1 = await callVoiceTextEndpoint(text, lang);
 
-    const reply = (res && res.reply) || '(no reply)';
-    appendLog('assistant', reply);
-
-    if(res && res.audio){{
-      await playAudioBase64Mp3(res.audio);
+    if(res1.ok && res1.data){{
+      const reply = (res1.data.reply) || "(no reply)";
+      appendLog('assistant', reply);
+      if(res1.data.audio){{
+        await playAudioBase64Mp3(res1.data.audio);
+      }}
+      return;
     }}
+
+    // If OLD fails, show error and still allow audio mode
+    appendLog('assistant', "Voice server text mode not available. Try audio mode.");
+    LOG("voice text error: " + (res1.error || "unknown"));
   }}
 
   const mic = document.getElementById('vaMic');
@@ -479,43 +569,72 @@ def build_voice_widget_html(proxy_url: str) -> str:
 
     if(isListening){{
       setStatus('Listening...');
-      if(!SpeechRecognition){{
-        alert("Speech Recognition not supported in this browser.");
+
+      // SpeechRecognition first (best for text)
+      if(SpeechRecognition){{
+        recog = new SpeechRecognition();
+        recog.interimResults = false;
+        recog.maxAlternatives = 1;
+
+        const lang = langSel.value || 'English';
+        recog.lang =
+          (lang === 'Hindi') ? 'hi-IN' :
+          (lang === 'Telugu') ? 'te-IN' :
+          (lang === 'Tamil') ? 'ta-IN' :
+          (lang === 'Gujarati') ? 'gu-IN' :
+          'en-US';
+
+        recog.onresult = async (ev) => {{
+          const text = ev.results[0][0].transcript;
+          await assistantFlow(text, lang);
+        }};
+
+        recog.onerror = async (e) => {{
+          setStatus('Mic Error');
+          LOG("recog error: " + (e && e.error));
+        }};
+
+        recog.onend = () => {{
+          isListening = false;
+          mic.classList.remove('va-micon');
+          setStatus('Idle');
+        }};
+
+        try {{
+          recog.start();
+        }} catch(e) {{
+          LOG("recog start failed: " + e);
+          isListening = false;
+          mic.classList.remove('va-micon');
+          setStatus('Idle');
+        }}
+
+      }} else {{
+        // If SpeechRecognition not supported, fallback to audio recording
+        try {{
+          const lang = langSel.value || 'English';
+          appendLog('assistant', "Speech Recognition not supported. Using audio mode...");
+
+          const audioBlob = await recordAudioOnce();
+          const res = await callVoiceAudioEndpoint(audioBlob);
+
+          if(res.ok && res.blob){{
+            appendLog('assistant', "Playing reply audio...");
+            await playAudioFromBlob(res.blob);
+          }} else {{
+            appendLog('assistant', "Audio mode failed.");
+            LOG("voice-audio error: " + (res.error || "unknown"));
+          }}
+        }} catch(e) {{
+          appendLog('assistant', "Audio recording failed.");
+          LOG("audio record error: " + e);
+        }}
+
         isListening = false;
         mic.classList.remove('va-micon');
         setStatus('Idle');
-        return;
       }}
 
-      recog = new SpeechRecognition();
-      recog.interimResults = false;
-      recog.maxAlternatives = 1;
-
-      const lang = langSel.value || 'English';
-      recog.lang =
-        (lang === 'Hindi') ? 'hi-IN' :
-        (lang === 'Telugu') ? 'te-IN' :
-        (lang === 'Tamil') ? 'ta-IN' :
-        (lang === 'Gujarati') ? 'gu-IN' :
-        'en-US';
-
-      recog.onresult = async (ev) => {{
-        const text = ev.results[0][0].transcript;
-        await assistantFlow(text, lang);
-      }};
-
-      recog.onerror = (e) => {{
-        setStatus('Error');
-        LOG("recog error: " + (e && e.error));
-      }};
-
-      recog.onend = () => {{
-        isListening = false;
-        mic.classList.remove('va-micon');
-        setStatus('Idle');
-      }};
-
-      recog.start();
     }} else {{
       try{{ if(recog) recog.stop(); }}catch(e){{}}
       setStatus('Idle');

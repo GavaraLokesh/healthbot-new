@@ -8,4 +8,5 @@ google-generativeai
 langgraph
 SpeechRecognition
 pydub
+SpeechRecognition
 
