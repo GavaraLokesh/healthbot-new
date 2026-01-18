@@ -1,11 +1,11 @@
 fastapi
 uvicorn
-httpx
 python-multipart
-gTTS
+httpx
 python-dotenv
+gTTS
 google-generativeai
-protobuf
 langgraph
-langchain-core
+SpeechRecognition
+pydub
 
