@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+venv/
+.venv/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local user DB (optional)
+users.json
+
+# Node (if any)
+node_modules/
+
+# Expo / React Native builds (if any)
+android/
+ios/
+dist/
+build/

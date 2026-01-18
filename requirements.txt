@@ -1,0 +1,10 @@
+streamlit
+requests
+Pillow
+langgraph
+langchain-core
+fastapi
+uvicorn
+gTTS
+httpx
+
