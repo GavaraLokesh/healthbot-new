@@ -1,5 +1,5 @@
 # voice_proxy.py
-# Multilingual Voice Proxy using GEMINI 2.5 FLASH + gTTS (FREE audio)
+# Multilingual Voice Proxy using GEMINI + gTTS (FREE audio)
 #
 # Supports: English, Hindi, Telugu, Tamil, Gujarati
 #
@@ -13,6 +13,7 @@
 import os
 import re
 import io
+import time
 import base64
 import logging
 from typing import Optional, Tuple
@@ -27,14 +28,14 @@ from google import genai
 logger = logging.getLogger("voice-proxy")
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="voice-proxy-gemini-2.5-flash-multilingual-tts")
+app = FastAPI(title="voice-proxy-gemini-multilingual-tts")
 
 # -------------------------
 # CORS (Streamlit / Website / Any)
 # -------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # allow all (easy for Streamlit + web)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,8 +48,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
     raise RuntimeError("❌ Missing GEMINI_API_KEY environment variable.")
 
-# ✅ Gemini 2.5 Flash (your request)
+# ✅ Your requested model
+# ⚠️ gemini-2.5-flash sometimes overloaded, so we keep fallback too
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-1.5-flash")
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -83,7 +86,6 @@ def shorten_text_to_sentences(text: str, max_sentences: int = 2) -> str:
     if len(sents) >= max_sentences:
         return " ".join(sents[:max_sentences]).strip()
 
-    # hard trim if too long
     return t if len(t) <= 350 else t[:347].rsplit(" ", 1)[0] + "..."
 
 
@@ -138,33 +140,57 @@ def language_instruction_from_code(lang_code: str) -> str:
 
 
 # -------------------------
-# Gemini generation
+# Gemini generation (with retry + fallback model)
 # -------------------------
 async def call_gemini_generate(user_text: str, lang_label: str = "English") -> Tuple[int, str]:
     """
-    Calls Gemini 2.5 Flash and returns (status_code, reply_text)
+    Calls Gemini and returns (status_code, reply_text)
+    - Retries on overload
+    - Falls back to gemini-1.5-flash if 2.5-flash fails
     """
-    try:
-        lang_code = LANG_CODE_FROM_LABEL(lang_label)
+    lang_code = LANG_CODE_FROM_LABEL(lang_label)
 
-        prompt = (
-            f"{SYSTEM_INSTRUCTION}\n"
-            f"{language_instruction_from_code(lang_code)}\n\n"
-            f"User question: {user_text}\n\n"
-            f"Answer:"
-        )
+    prompt = (
+        f"{SYSTEM_INSTRUCTION}\n"
+        f"{language_instruction_from_code(lang_code)}\n\n"
+        f"User question: {user_text}\n\n"
+        f"Answer:"
+    )
 
-        resp = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-        )
+    # 1) Try main model with retries
+    last_error = ""
+    for attempt in range(3):
+        try:
+            resp = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+            )
+            text = (resp.text or "").strip()
+            if text:
+                return 200, text
+            last_error = "Empty response from Gemini"
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"[Gemini main model failed] attempt={attempt+1} error={last_error}")
+            time.sleep(2)
 
-        text = (resp.text or "").strip()
-        return 200, text
+    # 2) Fallback model (more stable)
+    for attempt in range(2):
+        try:
+            resp = client.models.generate_content(
+                model=FALLBACK_MODEL,
+                contents=prompt,
+            )
+            text = (resp.text or "").strip()
+            if text:
+                return 200, text
+            last_error = "Empty response from Gemini fallback"
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"[Gemini fallback failed] attempt={attempt+1} error={last_error}")
+            time.sleep(2)
 
-    except Exception as e:
-        logger.exception("Gemini request failed")
-        return 500, str(e)
+    return 500, last_error
 
 
 # -------------------------
@@ -218,8 +244,12 @@ async def voice_endpoint(payload: dict):
     # Gemini reply
     status, gen_text = await call_gemini_generate(text, lang_label=lang_label)
 
-    if status != 200:
-        return {"reply": "", "audio": None, "error": f"GEMINI_{status}", "detail": gen_text}
+    # If Gemini fails -> still return fallback reply + voice
+    if status != 200 or not gen_text.strip():
+        fallback_reply = "Sorry, AI is busy right now. Please try again in 10 seconds."
+        gtts_lang = GTTS_LANG_FROM_LABEL(lang_label)
+        _, audio_b64 = await tts_synthesize_mp3_gtts(fallback_reply, lang=gtts_lang)
+        return {"reply": fallback_reply, "audio": audio_b64, "error": f"GEMINI_{status}", "detail": gen_text}
 
     short_reply = shorten_text_to_sentences(gen_text, max_sentences=2)
 
@@ -228,6 +258,7 @@ async def voice_endpoint(payload: dict):
     tts_status, audio_b64_or_err = await tts_synthesize_mp3_gtts(short_reply, lang=gtts_lang)
 
     if tts_status != 200:
+        # If TTS fails, still return reply
         return {"reply": short_reply, "audio": None, "error": "TTS_FAILED", "detail": audio_b64_or_err}
 
     return {"reply": short_reply, "audio": audio_b64_or_err}
@@ -235,4 +266,8 @@ async def voice_endpoint(payload: dict):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": GEMINI_MODEL}
+    return {
+        "status": "ok",
+        "model": GEMINI_MODEL,
+        "fallback_model": FALLBACK_MODEL
+    }
