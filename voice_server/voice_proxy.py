@@ -32,6 +32,50 @@ app = FastAPI(title="voice-proxy-gemini-2.5-flash-multilingual-tts")
 # -------------------------
 # CORS
 # -------------------------
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import FileResponse
+import os, uuid
+from gtts import gTTS
+
+# ...your existing imports + app = FastAPI() already there...
+
+
+@app.post("/voice")
+async def voice_text(payload: dict):
+    text = str(payload.get("text", "")).strip()
+    lang = str(payload.get("lang", "English")).strip()
+
+    if not text:
+        return {"reply": "", "audio": None}
+
+    # reply = your AI reply (Gemini / graph / whatever you are using)
+    # for now just echo:
+    reply = text
+
+    # gTTS language mapping
+    lang_map = {
+        "English": "en",
+        "Hindi": "hi",
+        "Telugu": "te",
+        "Tamil": "ta",
+        "Gujarati": "gu"
+    }
+    tts_lang = lang_map.get(lang, "en")
+
+    # generate mp3
+    filename = f"reply_{uuid.uuid4().hex}.mp3"
+    path = f"/tmp/{filename}"
+
+    tts = gTTS(text=reply, lang=tts_lang)
+    tts.save(path)
+
+    # return mp3 file as base64
+    import base64
+    with open(path, "rb") as f:
+        audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    return {"reply": reply, "audio": audio_b64}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Streamlit / any frontend
