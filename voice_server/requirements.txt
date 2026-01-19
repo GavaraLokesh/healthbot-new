@@ -9,4 +9,5 @@ langgraph
 SpeechRecognition
 pydub
 SpeechRecognition
-
+python-multipart
+google-genai
