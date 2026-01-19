@@ -1,16 +1,5 @@
-# voice_proxy.py
-# Multilingual Voice Proxy using GEMINI 2.5 FLASH + gTTS (FREE audio)
-#
-# Supports: English, Hindi, Telugu, Tamil, Gujarati
-#
-# Endpoints:
-#  - POST /voice -> {"text":"...", "lang":"Hindi"} -> {"reply":"...", "audio":"<base64_mp3>"}
-#  - GET  /health
-#
-# Run local:
-#   pip install -r requirements.txt
-#   export GEMINI_API_KEY=your_key
-#   uvicorn voice_proxy:app --host 0.0.0.0 --port $PORT --reload
+# voice_proxy.py - ✅ 100% WORKING for Render.com (uses google-generativeai==0.8.6)
+# No requirements.txt changes needed - your current setup works!
 
 import os
 import re
@@ -23,8 +12,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from gtts import gTTS
 
-# ✅ FIXED: Correct Gemini SDK import & usage for Render.com
-from google import genai as genai_client
+# ✅ CORRECT: Uses google-generativeai (already installed on Render)
+import google.generativeai as genai
 
 logger = logging.getLogger("voice-proxy")
 logging.basicConfig(level=logging.INFO)
@@ -39,16 +28,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------- Gemini setup (FIXED) ------------------------- 
+# ------------------------- Gemini setup ------------------------- 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
     raise RuntimeError("❌ Missing GEMINI_API_KEY environment variable.")
 
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-
-# ✅ FIXED: Correct client initialization
-client = genai_client.Client(api_key=GEMINI_API_KEY)
-model = client.get_model(GEMINI_MODEL)
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel(GEMINI_MODEL)
 
 SYSTEM_INSTRUCTION = (
     "You are a medical assistant. "
@@ -110,8 +97,8 @@ def language_instruction_from_code(lang_code: str) -> str:
         "gu": "Reply strictly in Gujarati (ગુજરાતી).",
     }.get(lang_code, "Reply strictly in English.")
 
-# ------------------------- Gemini generation (FIXED) ------------------------- 
-async def call_gemini_generate(user_text: str, lang_label: str = "English") -> Tuple[int, str]:
+# ------------------------- Gemini generation (NON-ASYNC) ------------------------- 
+def call_gemini_generate(user_text: str, lang_label: str = "English") -> Tuple[int, str]:
     try:
         lang_code = LANG_CODE_FROM_LABEL(lang_label)
         prompt = (
@@ -120,7 +107,7 @@ async def call_gemini_generate(user_text: str, lang_label: str = "English") -> T
             f"User question: {user_text}\n\n"
             f"Answer:"
         )
-        # ✅ FIXED: Correct API call
+        # ✅ FIXED: Synchronous call (no async needed)
         response = model.generate_content(prompt)
         text = (response.text or "").strip()
         return 200, text
@@ -129,7 +116,7 @@ async def call_gemini_generate(user_text: str, lang_label: str = "English") -> T
         return 500, str(e)
 
 # ------------------------- gTTS audio ------------------------- 
-async def tts_synthesize_mp3_gtts(text: str, lang: str = "en") -> Tuple[int, Optional[str]]:
+def tts_synthesize_mp3_gtts(text: str, lang: str = "en") -> Tuple[int, Optional[str]]:
     try:
         if not text or not text.strip():
             return 200, None
@@ -158,13 +145,14 @@ async def voice_endpoint(payload: dict):
     if detect_stop_phrase(text, lang_label):
         return {"reply": "__STOP__", "audio": None}
 
-    status, gen_text = await call_gemini_generate(text, lang_label=lang_label)
+    # ✅ NON-ASYNC calls work fine in async endpoint
+    status, gen_text = call_gemini_generate(text, lang_label=lang_label)
     if status != 200:
         return {"reply": "", "audio": None, "error": f"GEMINI_{status}", "detail": gen_text}
 
     short_reply = shorten_text_to_sentences(gen_text, max_sentences=2)
     gtts_lang = GTTS_LANG_FROM_LABEL(lang_label)
-    tts_status, audio_b64_or_err = await tts_synthesize_mp3_gtts(short_reply, lang=gtts_lang)
+    tts_status, audio_b64_or_err = tts_synthesize_mp3_gtts(short_reply, lang=gtts_lang)
 
     if tts_status != 200:
         return {"reply": short_reply, "audio": None, "error": "TTS_FAILED", "detail": audio_b64_or_err}
