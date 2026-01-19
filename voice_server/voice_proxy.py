@@ -8,6 +8,7 @@
 #  - GET  /health
 #
 # Run local:
+#   export GEMINI_API_KEY=your_key
 #   uvicorn voice_proxy:app --host 127.0.0.1 --port 8765
 
 import os
@@ -15,66 +16,20 @@ import re
 import io
 import base64
 import logging
+import uuid
 from typing import Optional, Tuple
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from gtts import gTTS
 
-# ✅ NEW Gemini SDK
-from google import genai
+# ✅ Google GenAI SDK
+import google.genai as genai
 
 logger = logging.getLogger("voice-proxy")
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="voice-proxy-gemini-2.5-flash-multilingual-tts")
-
-# -------------------------
-# CORS
-# -------------------------
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
-import os, uuid
-from gtts import gTTS
-
-# ...your existing imports + app = FastAPI() already there...
-
-
-@app.post("/voice")
-async def voice_text(payload: dict):
-    text = str(payload.get("text", "")).strip()
-    lang = str(payload.get("lang", "English")).strip()
-
-    if not text:
-        return {"reply": "", "audio": None}
-
-    # reply = your AI reply (Gemini / graph / whatever you are using)
-    # for now just echo:
-    reply = text
-
-    # gTTS language mapping
-    lang_map = {
-        "English": "en",
-        "Hindi": "hi",
-        "Telugu": "te",
-        "Tamil": "ta",
-        "Gujarati": "gu"
-    }
-    tts_lang = lang_map.get(lang, "en")
-
-    # generate mp3
-    filename = f"reply_{uuid.uuid4().hex}.mp3"
-    path = f"/tmp/{filename}"
-
-    tts = gTTS(text=reply, lang=tts_lang)
-    tts.save(path)
-
-    # return mp3 file as base64
-    import base64
-    with open(path, "rb") as f:
-        audio_b64 = base64.b64encode(f.read()).decode("utf-8")
-
-    return {"reply": reply, "audio": audio_b64}
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,17 +39,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# -------------------------
-# Gemini setup
-# -------------------------
+# ------------------------- Gemini setup ------------------------- 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 if not GEMINI_API_KEY:
     raise RuntimeError("❌ Missing GEMINI_API_KEY environment variable.")
 
-# ✅ Gemini 2.5 Flash model (your request)
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-
-client = genai.Client(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel(GEMINI_MODEL)
 
 SYSTEM_INSTRUCTION = (
     "You are a medical assistant. "
@@ -112,10 +64,7 @@ STOP_COMMANDS = {
     "gu": ["રોકો", "બોલવું બંધ કરો", "બંધ કરો"],
 }
 
-
-# -------------------------
-# Helpers
-# -------------------------
+# ------------------------- Helpers ------------------------- 
 def shorten_text_to_sentences(text: str, max_sentences: int = 2) -> str:
     """Keep answer short for better TTS + UI."""
     if not text:
@@ -123,45 +72,27 @@ def shorten_text_to_sentences(text: str, max_sentences: int = 2) -> str:
     t = re.sub(r"\s+", " ", text).strip()
     if not t:
         return ""
-
     sents = re.split(r"(?<=[.!?])\s+", t)
     if len(sents) >= max_sentences:
         return " ".join(sents[:max_sentences]).strip()
-
-    # hard trim if too long
     return t if len(t) <= 350 else t[:347].rsplit(" ", 1)[0] + "..."
-
 
 def LANG_CODE_FROM_LABEL(label: str) -> str:
     """Frontend label -> language code"""
-    if not label:
-        return "en"
     lookup = {
-        "English": "en",
-        "Hindi": "hi",
-        "Telugu": "te",
-        "Tamil": "ta",
-        "Gujarati": "gu",
-        "en": "en",
-        "hi": "hi",
-        "te": "te",
-        "ta": "ta",
-        "gu": "gu",
+        "English": "en", "Hindi": "hi", "Telugu": "te", 
+        "Tamil": "ta", "Gujarati": "gu",
+        "en": "en", "hi": "hi", "te": "te", "ta": "ta", "gu": "gu",
     }
     return lookup.get(str(label).strip(), "en")
-
 
 def GTTS_LANG_FROM_LABEL(label: str) -> str:
     """Frontend label -> gTTS lang"""
     cfg = {
-        "English": "en",
-        "Hindi": "hi",
-        "Telugu": "te",
-        "Tamil": "ta",
-        "Gujarati": "gu",
+        "English": "en", "Hindi": "hi", "Telugu": "te", 
+        "Tamil": "ta", "Gujarati": "gu",
     }
     return cfg.get(str(label).strip(), "en")
-
 
 def detect_stop_phrase(text: str, lang_label: str) -> bool:
     if not text:
@@ -170,7 +101,6 @@ def detect_stop_phrase(text: str, lang_label: str) -> bool:
     stop_list = STOP_COMMANDS.get(lang_code, [])
     txt = text.strip().lower()
     return txt in [s.lower() for s in stop_list]
-
 
 def language_instruction_from_code(lang_code: str) -> str:
     return {
@@ -181,71 +111,46 @@ def language_instruction_from_code(lang_code: str) -> str:
         "gu": "Reply strictly in Gujarati (ગુજરાતી).",
     }.get(lang_code, "Reply strictly in English.")
 
-
-# -------------------------
-# Gemini generation
-# -------------------------
+# ------------------------- Gemini generation ------------------------- 
 async def call_gemini_generate(user_text: str, lang_label: str = "English") -> Tuple[int, str]:
-    """
-    Calls Gemini 2.5 Flash and returns (status_code, reply_text)
-    """
+    """Calls Gemini 2.5 Flash and returns (status_code, reply_text)"""
     try:
         lang_code = LANG_CODE_FROM_LABEL(lang_label)
-
         prompt = (
             f"{SYSTEM_INSTRUCTION}\n"
             f"{language_instruction_from_code(lang_code)}\n\n"
             f"User question: {user_text}\n\n"
             f"Answer:"
         )
-
-        resp = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-        )
-
+        resp = model.generate_content(prompt)
         text = (resp.text or "").strip()
         return 200, text
-
     except Exception as e:
         logger.exception("Gemini request failed")
         return 500, str(e)
 
-
-# -------------------------
-# gTTS audio
-# -------------------------
+# ------------------------- gTTS audio ------------------------- 
 async def tts_synthesize_mp3_gtts(text: str, lang: str = "en") -> Tuple[int, Optional[str]]:
-    """
-    Generates MP3 using gTTS and returns base64 string.
-    """
+    """Generates MP3 using gTTS and returns base64 string."""
     try:
         if not text or not text.strip():
             return 200, None
-
         mp3_fp = io.BytesIO()
-        tts = gTTS(text=text, lang=lang)
+        tts = gTTS(text=text, lang=lang, slow=False)
         tts.write_to_fp(mp3_fp)
         mp3_fp.seek(0)
-
         audio_b64 = base64.b64encode(mp3_fp.read()).decode("utf-8")
         return 200, audio_b64
-
     except Exception as e:
         logger.exception("gTTS failed")
         return 500, str(e)
 
-
-# -------------------------
-# Endpoints
-# -------------------------
+# ------------------------- Endpoints ------------------------- 
 @app.post("/voice")
 async def voice_endpoint(payload: dict):
     """
-    Payload:
-      {"text":"...", "lang":"Telugu"}
-    Returns:
-      {"reply":"...", "audio":"<base64_mp3>"} or {"reply":"__STOP__"}
+    Payload: {"text":"...", "lang":"Telugu"}
+    Returns: {"reply":"...", "audio":"<base64_mp3>"} or {"reply":"__STOP__"}
     """
     if not payload:
         raise HTTPException(status_code=400, detail="Missing JSON body")
@@ -256,19 +161,18 @@ async def voice_endpoint(payload: dict):
     if text == "":
         return {"reply": "", "audio": None}
 
-    # stop command
+    # Stop command detection
     if detect_stop_phrase(text, lang_label):
         return {"reply": "__STOP__", "audio": None}
 
     # Gemini reply
     status, gen_text = await call_gemini_generate(text, lang_label=lang_label)
-
     if status != 200:
         return {"reply": "", "audio": None, "error": f"GEMINI_{status}", "detail": gen_text}
 
     short_reply = shorten_text_to_sentences(gen_text, max_sentences=2)
 
-    # gTTS voice in same language
+    # gTTS audio in same language
     gtts_lang = GTTS_LANG_FROM_LABEL(lang_label)
     tts_status, audio_b64_or_err = await tts_synthesize_mp3_gtts(short_reply, lang=gtts_lang)
 
@@ -276,7 +180,6 @@ async def voice_endpoint(payload: dict):
         return {"reply": short_reply, "audio": None, "error": "TTS_FAILED", "detail": audio_b64_or_err}
 
     return {"reply": short_reply, "audio": audio_b64_or_err}
-
 
 @app.get("/health")
 async def health():
