@@ -379,10 +379,11 @@ def step_tracker_page():
     </div>
 
 <script>
-let stepCount=0;
-let lastMagnitude=0;
-let threshold=1.2;
-let lastStepTime=0;
+let stepCount = 0;
+let lastMagnitude = 0;
+let threshold = 0.75;   // improved sensitivity
+let stepDelay = 250;    // NEW line
+let lastStepTime = 0;
 
 function updateUI(){
  document.getElementById("steps").innerText=stepCount;
@@ -399,7 +400,7 @@ function handleMotion(event){
  const mag=Math.sqrt(acc.x*acc.x+acc.y*acc.y+acc.z*acc.z);
  const now=Date.now();
 
- if(mag-lastMagnitude>threshold && (now-lastStepTime)>350){
+ if (mag - lastMagnitude > threshold && (now - lastStepTime) > stepDelay){
    stepCount++;
    lastStepTime=now;
    updateUI();
