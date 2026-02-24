@@ -18,7 +18,7 @@ import base64
 import logging
 from typing import Optional, Tuple
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from gtts import gTTS
 
@@ -271,3 +271,38 @@ async def health():
         "model": GEMINI_MODEL,
         "fallback_model": FALLBACK_MODEL
     }
+# -------------------------
+# Vision Endpoint (NEW)
+# -------------------------
+@app.post("/vision")
+async def vision_endpoint(
+    image: UploadFile = File(...),
+    question: str = Form(...),
+    lang: str = Form("English")
+):
+    """
+    Handles AI Doctor Vision requests.
+    Receives image + question from Streamlit.
+    """
+
+    try:
+        img_bytes = await image.read()
+
+        # import your LangGraph vision logic
+        from voice_server.agent_graph import graph
+
+        result = graph.invoke({
+            "messages": [{"role": "user", "content": question}],
+            "image_bytes": img_bytes
+        })
+
+        reply = result.get("reply", "").strip()
+
+        if not reply:
+            reply = "No reply from AI."
+
+        return {"reply": reply}
+
+    except Exception as e:
+        logger.exception("Vision endpoint failed")
+        return {"reply": f"Vision error: {e}"}
