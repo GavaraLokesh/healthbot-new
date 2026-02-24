@@ -357,6 +357,75 @@ def alarm_page():
     components.html(build_alarm_js(st.session_state.reminders), height=10)
 
     st.markdown("</div>", unsafe_allow_html=True)
+    # -----------------------
+# Step Tracker (NEW PAGE)
+# -----------------------
+def step_tracker_page():
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">👣 Real-Time Step Tracker</div>', unsafe_allow_html=True)
+
+    components.html("""
+    <div style="color:white;font-family:Arial;padding:10px;">
+      <h2 id="steps" style="font-size:40px;">0</h2>
+      <p id="status">Waiting for motion permission...</p>
+
+      <button onclick="resetSteps()"
+      style="padding:8px 12px;background:#34d399;border:none;border-radius:8px;font-weight:bold;">
+      Reset
+      </button>
+
+      <p>🚶 Distance: <span id="distance">0</span> km</p>
+      <p>🔥 Calories: <span id="calories">0</span> kcal</p>
+    </div>
+
+<script>
+let stepCount=0;
+let lastMagnitude=0;
+let threshold=1.2;
+let lastStepTime=0;
+
+function updateUI(){
+ document.getElementById("steps").innerText=stepCount;
+ document.getElementById("distance").innerText=(stepCount*0.0008).toFixed(2);
+ document.getElementById("calories").innerText=(stepCount*0.04).toFixed(1);
+}
+
+function resetSteps(){ stepCount=0; updateUI(); }
+
+function handleMotion(event){
+ const acc=event.accelerationIncludingGravity;
+ if(!acc)return;
+
+ const mag=Math.sqrt(acc.x*acc.x+acc.y*acc.y+acc.z*acc.z);
+ const now=Date.now();
+
+ if(mag-lastMagnitude>threshold && (now-lastStepTime)>350){
+   stepCount++;
+   lastStepTime=now;
+   updateUI();
+ }
+ lastMagnitude=mag;
+}
+
+function startTracking(){
+ if(typeof DeviceMotionEvent!=="undefined" &&
+    typeof DeviceMotionEvent.requestPermission==="function"){
+   DeviceMotionEvent.requestPermission().then(p=>{
+     if(p==="granted"){
+       window.addEventListener("devicemotion",handleMotion);
+       document.getElementById("status").innerText="Tracking steps...";
+     }
+   });
+ } else {
+   window.addEventListener("devicemotion",handleMotion);
+   document.getElementById("status").innerText="Tracking steps...";
+ }
+}
+startTracking();
+</script>
+""", height=420)
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # -----------------------
@@ -728,9 +797,9 @@ with left:
 
     st.radio(
         "Select:",
-        ["Home", "Chat Assistant", "AI Doctor Vision", "Diabetes Prediction", "Alarm Reminder"],
-        index=["Home", "Chat Assistant", "AI Doctor Vision", "Diabetes Prediction", "Alarm Reminder"].index(st.session_state.nav)
-        if st.session_state.nav in ["Home", "Chat Assistant", "AI Doctor Vision", "Diabetes Prediction", "Alarm Reminder"]
+        ["Home", "Chat Assistant", "AI Doctor Vision", "Diabetes Prediction", "Alarm Reminder","Step Tracker"],
+        index=["Home", "Chat Assistant", "AI Doctor Vision", "Diabetes Prediction", "Alarm Reminder","Step Tracker"].index(st.session_state.nav)
+        if st.session_state.nav in ["Home", "Chat Assistant", "AI Doctor Vision", "Diabetes Prediction", "Alarm Reminder","Step Tracker"]
         else 0,
         key="nav_select",
         on_change=nav_change,
@@ -757,5 +826,7 @@ with main:
         diabetes_page()
     elif page == "Alarm Reminder":
         alarm_page()
+    elif page == "Step Tracker":
+        step_tracker_page()
     else:
         show_home()
