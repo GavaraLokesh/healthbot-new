@@ -289,7 +289,7 @@ async def vision_endpoint(
         img_bytes = await image.read()
 
         # import your LangGraph vision logic
-        from voice_server.agent_graph import graph
+        from agent_graph import graph
 
         result = graph.invoke({
             "messages": [{"role": "user", "content": question}],
