@@ -83,24 +83,70 @@ if "reminders" not in st.session_state:
 # -----------------------
 st.set_page_config(page_title="HealthExplain AI", layout="wide")
 
-st.markdown(
-    """
+st.markdown("""
 <style>
-  body { background: #0b1220; color: #e6eef6; }
-  .main { max-width: 1200px; margin: auto; padding-top: 18px; padding-bottom: 40px; }
-  .sidebar-box { padding:14px; background:#0a0f16; border-radius:12px; border:1px solid rgba(255,255,255,0.06); }
-  .title-big { font-size:38px; font-weight:900; color:#d7ffe6; text-shadow: 0 0 14px rgba(0,255,150,0.10); }
-  .card { background: #0f1724; padding:18px; border-radius:16px; border:1px solid rgba(255,255,255,0.06);
-          box-shadow: 0 10px 40px rgba(2,6,23,0.55); }
-  .small { font-size:13px; color:#9fb0c7; }
-  .bubble-user { background: linear-gradient(90deg,#60a5fa,#34d399); color:white; padding:10px 14px; border-radius:14px; display:inline-block; max-width:78%; }
-  .bubble-bot { background:#e6eef6; color:#06121a; padding:10px 14px; border-radius:14px; display:inline-block; max-width:78%; }
-  .hr-soft { border:none; height:1px; background: rgba(255,255,255,0.08); margin:14px 0; }
-  .section-title { font-size:22px; font-weight:800; margin:0 0 6px 0; }
+
+/* 🌌 Animated Gradient Background */
+body {
+  background: linear-gradient(-45deg, #0f172a, #1e293b, #0ea5e9, #6366f1);
+  background-size: 400% 400%;
+  animation: gradientBG 12s ease infinite;
+  color: #e2e8f0;
+}
+
+@keyframes gradientBG {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* 🧊 Glass Card */
+.card {
+  background: rgba(2, 6, 23, 0.6);
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* Sidebar */
+.sidebar-box {
+  background: rgba(2, 6, 23, 0.7);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+/* ✨ Title */
+.title-big {
+  font-size: 38px;
+  font-weight: 900;
+  color: #38bdf8;
+}
+
+/* 💬 Chat bubbles */
+.bubble-user {
+  background: #6366f1;
+  color: white;
+  padding: 10px 14px;
+  border-radius: 14px;
+}
+
+.bubble-bot {
+  background: #e2e8f0;
+  color: #020617;
+  padding: 10px 14px;
+  border-radius: 14px;
+}
+
+/* Divider */
+.hr-soft {
+  border: none;
+  height: 1px;
+  background: rgba(255,255,255,0.1);
+  margin: 14px 0;
+}
+
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 # -----------------------
 # LangGraph call (memory from Streamlit)
